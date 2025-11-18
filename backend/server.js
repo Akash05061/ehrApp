@@ -1,13 +1,14 @@
-// server-advanced.js
+// server.js
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const s3Service = require('./s3-service');
+require('dotenv').config();
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'ehr-system-secret-key';
 
 // Middleware
@@ -47,7 +48,7 @@ const authenticateToken = (req, res, next) => {
 // Authorization middleware
 const requireRole = (roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();
@@ -60,33 +61,48 @@ let users = [];
 let appointments = [];
 let prescriptions = [];
 let labResults = [];
-let nextId = { patients: 1, users: 1, appointments: 1, prescriptions: 1, labResults: 1 };
+let medicalFiles = [];
+let nextId = { patients: 1, users: 1, appointments: 1, prescriptions: 1, labResults: 1, medicalFiles: 1 };
 
 // Initialize admin user
-const initializeAdmin = () => {
-  const hashedPassword = bcrypt.hashSync('admin123', 10);
-  users.push({
-    id: 1,
-    username: 'admin',
-    password: hashedPassword,
-    role: 'admin',
-    firstName: 'System',
-    lastName: 'Administrator',
-    email: 'admin@ehr.com'
-  });
+const initializeAdmin = async () => {
+  try {
+    const hashedPassword = await bcrypt.hash('admin123', 10);
+    users.push({
+      id: 1,
+      username: 'admin',
+      password: hashedPassword,
+      role: 'admin',
+      firstName: 'System',
+      lastName: 'Administrator',
+      email: 'admin@ehr.com',
+      createdAt: new Date().toISOString()
+    });
+    console.log('✅ Admin user initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize admin user:', error);
+  }
 };
-initializeAdmin();
 
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
 // User registration
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, password, firstName, lastName, email, role } = req.body;
+    const { username, password, firstName, lastName, email, role = 'staff' } = req.body;
+
+    // Validation
+    if (!username || !password || !firstName || !lastName || !email) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
 
     // Check if user exists
     if (users.find(u => u.username === username)) {
       return res.status(400).json({ error: 'Username already exists' });
+    }
+
+    if (users.find(u => u.email === email)) {
+      return res.status(400).json({ error: 'Email already exists' });
     }
 
     // Hash password
@@ -100,7 +116,7 @@ app.post('/api/auth/register', async (req, res) => {
       firstName,
       lastName,
       email,
-      role: role || 'staff',
+      role: ['admin', 'doctor', 'staff', 'receptionist', 'lab_technician'].includes(role) ? role : 'staff',
       createdAt: new Date().toISOString()
     };
 
@@ -135,6 +151,10 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
 
     // Find user
     const user = users.find(u => u.username === username);
@@ -186,9 +206,10 @@ app.get('/api/patients', authenticateToken, (req, res) => {
     // Search functionality
     if (search) {
       filteredPatients = patients.filter(patient =>
-        patient.firstName.toLowerCase().includes(search.toLowerCase()) ||
-        patient.lastName.toLowerCase().includes(search.toLowerCase()) ||
-        patient.phone.includes(search)
+        patient.firstName?.toLowerCase().includes(search.toLowerCase()) ||
+        patient.lastName?.toLowerCase().includes(search.toLowerCase()) ||
+        patient.phone?.includes(search) ||
+        patient.email?.toLowerCase().includes(search.toLowerCase())
       );
     }
 
@@ -221,12 +242,14 @@ app.get('/api/patients/:id', authenticateToken, (req, res) => {
     const patientAppointments = appointments.filter(a => a.patientId === patientId);
     const patientPrescriptions = prescriptions.filter(p => p.patientId === patientId);
     const patientLabResults = labResults.filter(l => l.patientId === patientId);
+    const patientFiles = medicalFiles.filter(f => f.patientId === patientId);
 
     const patientWithHistory = {
       ...patient,
       appointments: patientAppointments,
       prescriptions: patientPrescriptions,
-      labResults: patientLabResults
+      labResults: patientLabResults,
+      files: patientFiles
     };
 
     res.json(patientWithHistory);
@@ -244,6 +267,11 @@ app.post('/api/patients', authenticateToken, requireRole(['admin', 'doctor', 're
       address, emergencyContact, bloodType, insuranceInfo, medicalHistory
     } = req.body;
 
+    // Validation
+    if (!firstName || !lastName || !dateOfBirth || !gender || !phone) {
+      return res.status(400).json({ error: 'Required fields: firstName, lastName, dateOfBirth, gender, phone' });
+    }
+
     const patient = {
       id: nextId.patients++,
       firstName,
@@ -251,10 +279,10 @@ app.post('/api/patients', authenticateToken, requireRole(['admin', 'doctor', 're
       dateOfBirth,
       gender,
       phone,
-      email,
+      email: email || '',
       address: address || {},
       emergencyContact: emergencyContact || {},
-      bloodType,
+      bloodType: bloodType || '',
       insuranceInfo: insuranceInfo || {},
       medicalHistory: medicalHistory || [],
       createdAt: new Date().toISOString(),
@@ -300,13 +328,17 @@ app.post('/api/appointments', authenticateToken, requireRole(['admin', 'receptio
   try {
     const { patientId, doctorId, appointmentDate, reason, notes } = req.body;
 
+    if (!patientId || !doctorId || !appointmentDate) {
+      return res.status(400).json({ error: 'patientId, doctorId, and appointmentDate are required' });
+    }
+
     const appointment = {
       id: nextId.appointments++,
-      patientId,
-      doctorId,
+      patientId: parseInt(patientId),
+      doctorId: parseInt(doctorId),
       appointmentDate,
-      reason,
-      notes,
+      reason: reason || '',
+      notes: notes || '',
       status: 'scheduled',
       createdAt: new Date().toISOString(),
       createdBy: req.user.userId
@@ -345,6 +377,10 @@ app.put('/api/appointments/:id/status', authenticateToken, requireRole(['admin',
     const appointmentId = parseInt(req.params.id);
     const { status } = req.body;
 
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required' });
+    }
+
     const appointmentIndex = appointments.findIndex(a => a.id === appointmentId);
     if (appointmentIndex === -1) {
       return res.status(404).json({ error: 'Appointment not found' });
@@ -367,14 +403,18 @@ app.post('/api/prescriptions', authenticateToken, requireRole(['admin', 'doctor'
   try {
     const { patientId, medicationName, dosage, frequency, duration, instructions } = req.body;
 
+    if (!patientId || !medicationName || !dosage) {
+      return res.status(400).json({ error: 'patientId, medicationName, and dosage are required' });
+    }
+
     const prescription = {
       id: nextId.prescriptions++,
-      patientId,
+      patientId: parseInt(patientId),
       medicationName,
       dosage,
-      frequency,
-      duration,
-      instructions,
+      frequency: frequency || '',
+      duration: duration || '',
+      instructions: instructions || '',
       status: 'active',
       prescribedDate: new Date().toISOString(),
       prescribedBy: req.user.userId
@@ -407,14 +447,18 @@ app.post('/api/lab-results', authenticateToken, requireRole(['admin', 'doctor', 
   try {
     const { patientId, testName, result, normalRange, units, notes } = req.body;
 
+    if (!patientId || !testName || !result) {
+      return res.status(400).json({ error: 'patientId, testName, and result are required' });
+    }
+
     const labResult = {
       id: nextId.labResults++,
-      patientId,
+      patientId: parseInt(patientId),
       testName,
       result,
-      normalRange,
-      units,
-      notes,
+      normalRange: normalRange || '',
+      units: units || '',
+      notes: notes || '',
       testDate: new Date().toISOString(),
       createdBy: req.user.userId
     };
@@ -432,9 +476,15 @@ app.post('/api/lab-results', authenticateToken, requireRole(['admin', 'doctor', 
 // Upload medical file
 app.post('/api/patients/:id/files', authenticateToken, upload.single('file'), async (req, res) => {
   try {
-    const patientId = req.params.id;
+    const patientId = parseInt(req.params.id);
     const file = req.file;
     const { fileType, description } = req.body;
+
+    // Check if patient exists
+    const patient = patients.find(p => p.id === patientId);
+    if (!patient) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -446,18 +496,20 @@ app.post('/api/patients/:id/files', authenticateToken, upload.single('file'), as
       return res.status(500).json({ error: 'File upload failed', details: uploadResult.error });
     }
 
-    // Store file metadata (in real app, save to database)
+    // Store file metadata
     const fileRecord = {
-      id: Date.now(),
-      patientId: parseInt(patientId),
+      id: nextId.medicalFiles++,
+      patientId: patientId,
       fileName: file.originalname,
-      fileType,
-      description,
+      fileType: fileType || 'medical',
+      description: description || '',
       s3Key: uploadResult.key,
       s3Url: uploadResult.url,
       uploadedBy: req.user.userId,
       uploadDate: new Date().toISOString()
     };
+
+    medicalFiles.push(fileRecord);
 
     res.json({
       message: 'File uploaded successfully',
@@ -469,6 +521,18 @@ app.post('/api/patients/:id/files', authenticateToken, upload.single('file'), as
   }
 });
 
+// Get patient files
+app.get('/api/patients/:id/files', authenticateToken, (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patientFiles = medicalFiles.filter(f => f.patientId === patientId);
+    res.json({ files: patientFiles });
+  } catch (error) {
+    console.error('Get files error:', error);
+    res.status(500).json({ error: 'Failed to fetch files' });
+  }
+});
+
 // ==================== ANALYTICS ENDPOINTS ====================
 
 // Get system statistics
@@ -476,9 +540,12 @@ app.get('/api/analytics/overview', authenticateToken, requireRole(['admin']), (r
   try {
     const stats = {
       totalPatients: patients.length,
+      totalUsers: users.length,
       totalAppointments: appointments.length,
       upcomingAppointments: appointments.filter(a => a.status === 'scheduled').length,
       totalPrescriptions: prescriptions.length,
+      totalLabResults: labResults.length,
+      totalFiles: medicalFiles.length,
       recentLabResults: labResults.slice(-10).length
     };
 
@@ -493,6 +560,8 @@ app.get('/api/analytics/overview', authenticateToken, requireRole(['admin']), (r
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Advanced EHR Backend is running!',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
     features: [
       'Authentication & Authorization',
       'Patient Management',
@@ -508,6 +577,13 @@ app.get('/api/health', (req, res) => {
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
+  
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large' });
+    }
+  }
+  
   res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -516,14 +592,22 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Advanced EHR Backend running on http://0.0.0.0:${PORT}`);
-  console.log('📋 Available Features:');
-  console.log('   ✅ Authentication & Role-based Access');
-  console.log('   ✅ Enhanced Patient Management');
-  console.log('   ✅ Appointment Scheduling');
-  console.log('   ✅ Prescription Management');
-  console.log('   ✅ Lab Results Tracking');
-  console.log('   ✅ File Upload to S3');
-  console.log('   ✅ Analytics & Reporting');
-});
+// Initialize server
+const startServer = async () => {
+  await initializeAdmin();
+  
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Advanced EHR Backend running on http://0.0.0.0:${PORT}`);
+    console.log('📋 Available Features:');
+    console.log('   ✅ Authentication & Role-based Access');
+    console.log('   ✅ Enhanced Patient Management');
+    console.log('   ✅ Appointment Scheduling');
+    console.log('   ✅ Prescription Management');
+    console.log('   ✅ Lab Results Tracking');
+    console.log('   ✅ File Upload to S3');
+    console.log('   ✅ Analytics & Reporting');
+    console.log(`   🔐 Admin credentials: admin / admin123`);
+  });
+};
+
+startServer();
