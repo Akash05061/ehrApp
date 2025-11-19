@@ -17,12 +17,17 @@ const PatientForm = () => {
   });
   const [loading, setLoading] = useState(false);
 
+  // Use the same base URL as your api.js
+  const API_BASE_URL = 'http://13.127.5.209:3001/api';
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     
     try {
-      const response = await fetch('/api/patients', {
+      console.log('📝 PatientForm: Submitting patient data:', formData);
+      
+      const response = await fetch(`${API_BASE_URL}/patients`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -31,9 +36,12 @@ const PatientForm = () => {
         body: JSON.stringify(formData)
       });
       
+      console.log('📥 PatientForm: Response status:', response.status);
       const data = await response.json();
+      console.log('📥 PatientForm: Response data:', data);
       
       if (response.ok) {
+        console.log('✅ Patient created successfully');
         alert('Patient created successfully!');
         setFormData({
           firstName: '',
@@ -48,10 +56,11 @@ const PatientForm = () => {
           medicalHistory: ''
         });
       } else {
+        console.log('❌ Patient creation failed:', data.error);
         alert(`Error: ${data.error || 'Failed to create patient'}`);
       }
     } catch (error) {
-      console.error('Error creating patient:', error);
+      console.error('❌ PatientForm Error:', error);
       alert('Error creating patient. Please try again.');
     } finally {
       setLoading(false);
