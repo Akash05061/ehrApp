@@ -13,7 +13,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ehr-system-secret-key';
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// Middleware - FIXED CORS CONFIGURATION
+app.use(cors({
+  origin: 'http://localhost:3000', // Your frontend URL
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // File upload configuration
 const upload = multer({
@@ -607,6 +613,7 @@ const startServer = async () => {
     console.log('   ✅ File Upload to S3');
     console.log('   ✅ Analytics & Reporting');
     console.log(`   🔐 Admin credentials: admin / admin123`);
+    console.log(`   🌐 CORS enabled for: http://localhost:3000`);
   });
 };
 
