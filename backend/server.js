@@ -80,6 +80,10 @@ let labResults = [];
 let medicalFiles = [];
 let nextId = { patients: 1, users: 1, appointments: 1, prescriptions: 1, labResults: 1, medicalFiles: 1 };
 
+// ==================== MEDICAL RECORDS STORAGE ====================
+let medicalRecords = [];
+let nextMedicalRecordId = 1;
+
 // Initialize admin user
 const initializeAdmin = async () => {
   try {
@@ -259,13 +263,15 @@ app.get('/api/patients/:id', authenticateToken, (req, res) => {
     const patientPrescriptions = prescriptions.filter(p => p.patientId === patientId);
     const patientLabResults = labResults.filter(l => l.patientId === patientId);
     const patientFiles = medicalFiles.filter(f => f.patientId === patientId);
+    const patientMedicalRecords = medicalRecords.filter(record => record.patientId === patientId);
 
     const patientWithHistory = {
       ...patient,
       appointments: patientAppointments,
       prescriptions: patientPrescriptions,
       labResults: patientLabResults,
-      files: patientFiles
+      files: patientFiles,
+      medicalRecords: patientMedicalRecords
     };
 
     res.json(patientWithHistory);
@@ -334,6 +340,123 @@ app.put('/api/patients/:id', authenticateToken, requireRole(['admin', 'doctor'])
   } catch (error) {
     console.error('Update patient error:', error);
     res.status(500).json({ error: 'Failed to update patient' });
+  }
+});
+
+// ==================== MEDICAL RECORDS ENDPOINTS ====================
+
+// Get patient medical records
+app.get('/api/patients/:id/medical-records', authenticateToken, (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patientRecords = medicalRecords.filter(record => record.patientId === patientId);
+    
+    res.json({ medicalRecords: patientRecords });
+  } catch (error) {
+    console.error('Get medical records error:', error);
+    res.status(500).json({ error: 'Failed to fetch medical records' });
+  }
+});
+
+// Add medical record (vitals, symptoms, diagnosis)
+app.post('/api/patients/:id/medical-records', authenticateToken, requireRole(['admin', 'doctor']), (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const {
+      visitDate,
+      symptoms,
+      diagnosis,
+      treatment,
+      medications,
+      vitals = {},
+      notes,
+      followUpDate
+    } = req.body;
+
+    // Validation
+    if (!visitDate || !symptoms) {
+      return res.status(400).json({ error: 'Visit date and symptoms are required' });
+    }
+
+    const medicalRecord = {
+      id: nextMedicalRecordId++,
+      patientId,
+      visitDate,
+      symptoms: Array.isArray(symptoms) ? symptoms : [symptoms],
+      diagnosis: diagnosis || '',
+      treatment: treatment || '',
+      medications: Array.isArray(medications) ? medications : (medications ? [medications] : []),
+      vitals: {
+        bloodPressure: vitals.bloodPressure || '',
+        temperature: vitals.temperature || '',
+        heartRate: vitals.heartRate || '',
+        respiratoryRate: vitals.respiratoryRate || '',
+        oxygenSaturation: vitals.oxygenSaturation || '',
+        height: vitals.height || '',
+        weight: vitals.weight || '',
+        bmi: vitals.bmi || ''
+      },
+      notes: notes || '',
+      followUpDate: followUpDate || '',
+      createdBy: req.user.userId,
+      createdAt: new Date().toISOString()
+    };
+
+    medicalRecords.push(medicalRecord);
+    res.status(201).json({ 
+      message: 'Medical record added successfully', 
+      medicalRecord 
+    });
+  } catch (error) {
+    console.error('Add medical record error:', error);
+    res.status(500).json({ error: 'Failed to add medical record' });
+  }
+});
+
+// Update medical record
+app.put('/api/medical-records/:id', authenticateToken, requireRole(['admin', 'doctor']), (req, res) => {
+  try {
+    const recordId = parseInt(req.params.id);
+    const recordIndex = medicalRecords.findIndex(record => record.id === recordId);
+
+    if (recordIndex === -1) {
+      return res.status(404).json({ error: 'Medical record not found' });
+    }
+
+    medicalRecords[recordIndex] = {
+      ...medicalRecords[recordIndex],
+      ...req.body,
+      updatedAt: new Date().toISOString(),
+      updatedBy: req.user.userId
+    };
+
+    res.json({ 
+      message: 'Medical record updated successfully', 
+      medicalRecord: medicalRecords[recordIndex] 
+    });
+  } catch (error) {
+    console.error('Update medical record error:', error);
+    res.status(500).json({ error: 'Failed to update medical record' });
+  }
+});
+
+// Get vitals history for a patient
+app.get('/api/patients/:id/vitals', authenticateToken, (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patientRecords = medicalRecords
+      .filter(record => record.patientId === patientId)
+      .map(record => ({
+        date: record.visitDate,
+        vitals: record.vitals,
+        recordId: record.id
+      }))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ vitalsHistory: patientRecords });
+  } catch (error) {
+    console.error('Get vitals history error:', error);
+    res.status(500).json({ error: 'Failed to fetch vitals history' });
   }
 });
 
@@ -562,7 +685,8 @@ app.get('/api/analytics/overview', authenticateToken, requireRole(['admin']), (r
       totalPrescriptions: prescriptions.length,
       totalLabResults: labResults.length,
       totalFiles: medicalFiles.length,
-      recentLabResults: labResults.slice(-10).length
+      recentLabResults: labResults.slice(-10).length,
+      totalMedicalRecords: medicalRecords.length
     };
 
     res.json(stats);
@@ -585,6 +709,7 @@ app.get('/api/health', (req, res) => {
       'Prescription Management',
       'Lab Results',
       'File Upload',
+      'Medical Records',
       'Analytics'
     ]
   });
@@ -617,6 +742,7 @@ const startServer = async () => {
     console.log('📋 Available Features:');
     console.log('   ✅ Authentication & Role-based Access');
     console.log('   ✅ Enhanced Patient Management');
+    console.log('   ✅ Medical Records & Vitals Tracking');
     console.log('   ✅ Appointment Scheduling');
     console.log('   ✅ Prescription Management');
     console.log('   ✅ Lab Results Tracking');
