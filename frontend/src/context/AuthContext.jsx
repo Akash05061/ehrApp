@@ -43,27 +43,41 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (username, password) => {
-    try {
-      const response = await authAPI.login({ username, password });
-      
-      if (response.data.token) {
-        const { token, user } = response.data;
-        
-        localStorage.setItem('token', token);
-        localStorage.setItem('userData', JSON.stringify(user));
-        
-        setToken(token);
-        setUser(user);
-        
-        toast.success('Login successful!');
-        return { success: true };
-      }
-    } catch (error) {
-      const message = error.response?.data?.error || 'Login failed';
-      toast.error(message);
-      return { success: false, error: message };
+  try {
+    console.log('🔴 AuthContext: Starting login for user:', username);
+    console.log('🟡 AuthContext: Calling authAPI.login...');
+    
+    const response = await authAPI.login({ username, password });
+    
+    console.log('🟢 AuthContext: API response received:', response);
+    console.log('🟢 AuthContext: Response data:', response.data);
+
+    if (response.data.token) {
+      const { token, user } = response.data;
+      console.log('✅ AuthContext: Login successful, token received');
+
+      localStorage.setItem('token', token);
+      localStorage.setItem('userData', JSON.stringify(user));
+
+      setToken(token);
+      setUser(user);
+
+      toast.success('Login successful!');
+      return { success: true };
+    } else {
+      console.log('❌ AuthContext: No token in response');
+      return { success: false, error: 'No token received' };
     }
-  };
+  } catch (error) {
+    console.log('❌ AuthContext: Login error:', error);
+    console.log('❌ AuthContext: Error details:', error.message);
+    console.log('❌ AuthContext: Error response:', error.response);
+    
+    const message = error.response?.data?.error || 'Login failed';
+    toast.error(message);
+    return { success: false, error: message };
+  }
+};
 
   const register = async (userData) => {
     try {
