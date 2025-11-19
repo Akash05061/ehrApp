@@ -11,14 +11,25 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'ehr-system-secret-key';
 
-
 // Middleware - FIXED CORS CONFIGURATION
 app.use(cors({
-  origin: 'http://localhost:3000', // Your frontend URL
+  origin: ['http://localhost:3000', 'http://13.127.5.209:3000', 'http://172.31.33.70:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Debug: Log CORS configuration
+console.log('🌐 CORS configured for origins:', ['http://localhost:3000', 'http://13.127.5.209:3000', 'http://172.31.33.70:3000']);
+
+// Add express.json() middleware HERE - this is crucial!
+app.use(express.json());
+
+app.use((req, res, next) => {
+  console.log(`📨 ${req.method} ${req.url} from origin: ${req.headers.origin}`);
+  console.log(`📋 Headers:`, req.headers);
+  next();
+});
 
 // File upload configuration
 const upload = multer({
